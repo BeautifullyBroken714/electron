@@ -385,4 +385,55 @@ void Beep() {
   MessageBeep(MB_OK);
 }
 
+ProcessIntegrityLevel GetProcessIntegrityLevel(base::ProcessHandle handle) {
+  HANDLE token = nullptr;
+  if (!::OpenProcessToken(handle, TOKEN_QUERY, &token)) {
+    return ProcessIntegrityLevel::Unknown;
+  }
+
+  base::win::ScopedHandle token_scoped(token);
+
+  DWORD token_info_length = 0;
+  if (::GetTokenInformation(token, TokenIntegrityLevel, nullptr, 0,
+                            &token_info_length) ||
+      ::GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+    return ProcessIntegrityLevel::Unknown;
+  }
+
+  auto token_label_bytes = std::make_unique<char[]>(token_info_length);
+  TOKEN_MANDATORY_LABEL* token_label =
+      reinterpret_cast<TOKEN_MANDATORY_LABEL*>(token_label_bytes.get());
+  if (!::GetTokenInformation(token, TokenIntegrityLevel, token_label,
+                             token_info_length, &token_info_length)) {
+    return ProcessIntegrityLevel::Unknown;
+  }
+
+  DWORD integrity_level = *::GetSidSubAuthority(
+      token_label->Label.Sid,
+      static_cast<DWORD>(*::GetSidSubAuthorityCount(token_label->Label.Sid) -
+                         1));
+
+  if (integrity_level >= SECURITY_MANDATORY_UNTRUSTED_RID &&
+      integrity_level < SECURITY_MANDATORY_LOW_RID) {
+    return ProcessIntegrityLevel::Untrusted;
+  }
+
+  if (integrity_level >= SECURITY_MANDATORY_LOW_RID &&
+      integrity_level < SECURITY_MANDATORY_MEDIUM_RID) {
+    return ProcessIntegrityLevel::Low;
+  }
+
+  if (integrity_level >= SECURITY_MANDATORY_MEDIUM_RID &&
+      integrity_level < SECURITY_MANDATORY_HIGH_RID) {
+    return ProcessIntegrityLevel::Medium;
+  }
+
+  if (integrity_level >= SECURITY_MANDATORY_HIGH_RID &&
+      integrity_level < SECURITY_MANDATORY_SYSTEM_RID) {
+    return ProcessIntegrityLevel::High;
+  }
+
+  return ProcessIntegrityLevel::Unknown;
+}
+
 }  // namespace platform_util

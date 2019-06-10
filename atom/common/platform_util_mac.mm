@@ -23,6 +23,8 @@
 #include "net/base/mac/url_conversions.h"
 #include "url/gurl.h"
 
+extern "C" int sandbox_check(pid_t pid, const char* operation, int type, ...);
+
 namespace {
 
 // This may be called from a global dispatch queue, the methods used here are
@@ -154,6 +156,14 @@ bool GetLoginItemEnabled() {
 bool SetLoginItemEnabled(bool enabled) {
   NSString* identifier = GetLoginHelperBundleIdentifier();
   return SMLoginItemSetEnabled((__bridge CFStringRef)identifier, enabled);
+}
+
+bool IsProcessSandboxed(pid_t pid) {
+#if defined(MAS_BUILD)
+  return true;
+#else
+  return sandbox_check(pid, nullptr, 0) != 0;
+#endif
 }
 
 }  // namespace platform_util

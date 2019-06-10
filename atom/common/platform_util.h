@@ -9,6 +9,7 @@
 
 #include "base/callback_forward.h"
 #include "base/files/file_path.h"
+#include "base/process/process_handle.h"
 #include "build/build_config.h"
 
 #if defined(OS_WIN)
@@ -48,12 +49,25 @@ void Beep();
 #if defined(OS_MACOSX)
 bool GetLoginItemEnabled();
 bool SetLoginItemEnabled(bool enabled);
+bool IsProcessSandboxed(pid_t pid);
 #endif
 
 #if defined(OS_LINUX)
 // Returns a success flag.
 // Unlike libgtkui, does *not* use "chromium-browser.desktop" as a fallback.
 bool GetDesktopName(std::string* setme);
+#endif
+
+#if defined(OS_WIN)
+enum class ProcessIntegrityLevel {
+  Unknown,
+  Untrusted,
+  Low,
+  Medium,
+  High,
+};
+
+ProcessIntegrityLevel GetProcessIntegrityLevel(base::ProcessHandle handle);
 #endif
 
 }  // namespace platform_util

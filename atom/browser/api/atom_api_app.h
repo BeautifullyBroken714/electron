@@ -17,7 +17,7 @@
 #include "atom/browser/browser_observer.h"
 #include "atom/common/native_mate_converters/callback.h"
 #include "atom/common/promise_util.h"
-#include "base/process/process_iterator.h"
+#include "base/process/process.h"
 #include "base/process/process_metrics.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "chrome/browser/icon_manager.h"
@@ -51,11 +51,11 @@ enum class JumpListResult : int;
 
 struct ProcessMetric {
   int type;
-  base::ProcessId pid;
+  base::Process process;
   std::unique_ptr<base::ProcessMetrics> metrics;
 
   ProcessMetric(int type,
-                base::ProcessId pid,
+                base::ProcessHandle handle,
                 std::unique_ptr<base::ProcessMetrics> metrics);
   ~ProcessMetric();
 };

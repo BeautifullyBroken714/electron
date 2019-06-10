@@ -28,6 +28,7 @@
 #include "atom/common/native_mate_converters/value_converter.h"
 #include "atom/common/node_includes.h"
 #include "atom/common/options_switches.h"
+#include "atom/common/platform_util.h"
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/files/file_path.h"
@@ -57,6 +58,7 @@
 #if defined(OS_WIN)
 #include "atom/browser/ui/win/jump_list.h"
 #include "base/strings/utf_string_conversions.h"
+using ProcessIntegrityLevel = platform_util::ProcessIntegrityLevel;
 #endif
 
 #if defined(OS_MACOSX)
@@ -69,6 +71,25 @@ using atom::Browser;
 namespace mate {
 
 #if defined(OS_WIN)
+template <>
+struct Converter<ProcessIntegrityLevel> {
+  static v8::Local<v8::Value> ToV8(v8::Isolate* isolate,
+                                   ProcessIntegrityLevel value) {
+    switch (value) {
+      case ProcessIntegrityLevel::Untrusted:
+        return mate::StringToV8(isolate, "untrusted");
+      case ProcessIntegrityLevel::Low:
+        return mate::StringToV8(isolate, "low");
+      case ProcessIntegrityLevel::Medium:
+        return mate::StringToV8(isolate, "medium");
+      case ProcessIntegrityLevel::High:
+        return mate::StringToV8(isolate, "high");
+      default:
+        return mate::StringToV8(isolate, "unknown");
+    }
+  }
+};
+
 template <>
 struct Converter<Browser::UserTask> {
   static bool FromV8(v8::Isolate* isolate,
@@ -358,11 +379,19 @@ struct Converter<content::CertificateRequestResultType> {
 namespace atom {
 
 ProcessMetric::ProcessMetric(int type,
-                             base::ProcessId pid,
+                             base::ProcessHandle handle,
                              std::unique_ptr<base::ProcessMetrics> metrics) {
   this->type = type;
-  this->pid = pid;
   this->metrics = std::move(metrics);
+
+#if defined(OS_WIN)
+  HANDLE duplicate_handle = INVALID_HANDLE_VALUE;
+  ::DuplicateHandle(::GetCurrentProcess(), handle, ::GetCurrentProcess(),
+                    &duplicate_handle, 0, false, DUPLICATE_SAME_ACCESS);
+  this->process = base::Process(duplicate_handle);
+#else
+  this->process = base::Process(handle);
+#endif
 }
 
 ProcessMetric::~ProcessMetric() = default;
@@ -370,17 +399,6 @@ ProcessMetric::~ProcessMetric() = default;
 namespace api {
 
 namespace {
-
-class AppIdProcessIterator : public base::ProcessIterator {
- public:
-  AppIdProcessIterator() : base::ProcessIterator(nullptr) {}
-
- protected:
-  bool IncludeEntry() override {
-    return (entry().parent_pid() == base::GetCurrentProcId() ||
-            entry().pid() == base::GetCurrentProcId());
-  }
-};
 
 IconLoader::IconSize GetIconSizeByString(const std::string& size) {
   if (size == "small") {
@@ -550,7 +568,7 @@ App::App(v8::Isolate* isolate) {
 
   base::ProcessId pid = base::GetCurrentProcId();
   auto process_metric = std::make_unique<atom::ProcessMetric>(
-      content::PROCESS_TYPE_BROWSER, pid,
+      content::PROCESS_TYPE_BROWSER, base::GetCurrentProcessHandle(),
       base::ProcessMetrics::CreateCurrentProcessMetrics());
   app_metrics_[pid] = std::move(process_metric);
   Init(isolate);
@@ -825,15 +843,13 @@ void App::ChildProcessLaunched(int process_type, base::ProcessHandle handle) {
   auto pid = base::GetProcId(handle);
 
 #if defined(OS_MACOSX)
-  std::unique_ptr<base::ProcessMetrics> metrics(
-      base::ProcessMetrics::CreateProcessMetrics(
-          handle, content::BrowserChildProcessHost::GetPortProvider()));
+  auto metrics = base::ProcessMetrics::CreateProcessMetrics(
+      handle, content::BrowserChildProcessHost::GetPortProvider());
 #else
-  std::unique_ptr<base::ProcessMetrics> metrics(
-      base::ProcessMetrics::CreateProcessMetrics(handle));
+  auto metrics = base::ProcessMetrics::CreateProcessMetrics(handle);
 #endif
-  app_metrics_[pid] = std::make_unique<atom::ProcessMetric>(process_type, pid,
-                                                            std::move(metrics));
+  app_metrics_[pid] = std::make_unique<atom::ProcessMetric>(
+      process_type, handle, std::move(metrics));
 }
 
 void App::ChildProcessDisconnected(base::ProcessId pid) {
@@ -1214,10 +1230,26 @@ std::vector<mate::Dictionary> App::GetAppMetrics(v8::Isolate* isolate) {
     cpu_dict.Set("idleWakeupsPerSecond", 0);
 #endif
 
+    auto pid = process_metric.second->process.Pid();
+    auto creation_time = process_metric.second->process.CreationTime();
+
     pid_dict.Set("cpu", cpu_dict);
-    pid_dict.Set("pid", process_metric.second->pid);
+    pid_dict.Set("pid", pid);
     pid_dict.Set("type", content::GetProcessTypeNameInEnglish(
                              process_metric.second->type));
+    pid_dict.Set("creationTime", creation_time.ToJsTime());
+
+#if defined(OS_MACOSX)
+    pid_dict.Set("sandboxed", platform_util::IsProcessSandboxed(pid));
+#elif defined(OS_WIN)
+    auto integrity_level = platform_util::GetProcessIntegrityLevel(
+        process_metric.second->process.Handle());
+    auto sandboxed = integrity_level > ProcessIntegrityLevel::Unknown &&
+                     integrity_level < ProcessIntegrityLevel::Medium;
+    pid_dict.Set("integrityLevel", integrity_level);
+    pid_dict.Set("sandboxed", sandboxed);
+#endif
+
     result.push_back(pid_dict);
   }
 
